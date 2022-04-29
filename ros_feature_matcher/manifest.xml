@@ -1,0 +1,14 @@
+<package>
+  <description brief="ros_feature_matcher">
+
+     ros_feature_matcher
+
+  </description>
+  <author>Shakeel</author>
+  <license>BSD</license>
+  <review status="unreviewed" notes=""/>
+  <url>http://ros.org/wiki/ros_feature_matcher</url>
+  <depend package="std_msgs"/>
+  <depend package="rospy"/>
+  <depend package="roscpp"/>
+</package>
