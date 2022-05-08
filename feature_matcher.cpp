@@ -26,7 +26,7 @@ const char* DATASET_PATH = "dataset/sequences/00/image_0/";
 const int IMG_WIDTH = 1241;
 const int IMG_HEIGHT = 376;
 
-const int NUM_IMAGES = 5;
+const int NUM_IMAGES = 10;
 
 bool verbose = false;
 
@@ -87,7 +87,8 @@ int main( int argc, char* argv[] )
     verbose = parser.get<bool>("verbose");
 
     int minHessian = 400;
-    Ptr<ORB> detector = ORB::create( minHessian );
+    
+    Ptr<ORB> detector = ORB::create(minHessian);
     Ptr<DescriptorMatcher> matcher = DescriptorMatcher::create("BruteForce-Hamming");
 
 
@@ -282,7 +283,7 @@ int main( int argc, char* argv[] )
         }
 
         Mat res;
-        hconcat(img1, img2, res);
+        vconcat(img1, img2, res);
         imshow("res", res);
         imwrite("tracking_" + to_string(image_index) + ".png", res);
         waitKey();

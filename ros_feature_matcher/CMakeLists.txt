@@ -29,11 +29,14 @@ set(LIBRARY_OUTPUT_PATH ${PROJECT_SOURCE_DIR}/lib)
 #rosbuild_add_executable(example examples/example.cpp)
 #target_link_libraries(example ${PROJECT_NAME})
 
+SET(ROS_BUILD_STATIC_LIBS true)
+SET(ROS_BUILD_SHARED_LIBS false)
+SET(libs roslib roscpp rosbag)
+
 find_package( OpenCV REQUIRED )
+find_package( cv_bridge REQUIRED)
 include_directories( ${OpenCV_INCLUDE_DIRS} )
 
 rosbuild_add_executable(ros_feature_matcher src/ros_feature_matcher.cpp)
-# rosbuild_add_executable(subscriber src/subscriber.cpp)
-target_link_libraries( ros_feature_matcher ${OpenCV_LIBS} )
-# target_link_libraries( subscriber ${OpenCV_LIBS} )
 set(CMAKE_EXPORT_COMPILE_COMMANDS on)
+target_link_libraries( ros_feature_matcher ${libs} ${OpenCV_LIBS} )
