@@ -11,6 +11,8 @@
 #include <cv_bridge/cv_bridge.h>
 #include "opencv2/highgui.hpp"
 #include "opencv2/features2d.hpp"
+#include "eigen3/Eigen/Dense"
+#include "eigen3/Eigen/Geometry"
 // #include "opencv2/xfeatures2d.hpp"
 
 /* Camera Calibration Stuff: 
@@ -94,6 +96,9 @@ bool verbose = false;
 
 vector<int> result_point_indices {};
 vector<unordered_map<int, int>> image_mappings;
+vector<Eigen::Vector3f> point_3d_locs;
+vector<float> camera_angles;
+vector<Eigen::Vector3f> camera_translations;
 
 Mat last_image;
 Mat curr_image;
@@ -146,11 +151,21 @@ Point2f extractKey(int key) {
     return Point2f(key % IMG_WIDTH, key / IMG_WIDTH);
 }
 
+float odomX, odomY, odomAngle;
+
+Eigen::Vector3f rotateVector(Eigen::Vector3f v, Eigen::Vector3f rotAxis, float theta);
+
+Eigen::Vector3f get3DPoint(int rgbX, int rgbY);
+
 void ImageCallback(const sensor_msgs::CompressedImageConstPtr& msg) {
     try {
         cv_bridge::CvImagePtr image = cv_bridge::toCvCopy(msg, sensor_msgs::image_encodings::BGR8);
         // imshow("ros image", image->image);
         // waitKey();
+
+        if(image->image.empty()) return;
+
+        // TODO: What if there are no features? probably doesn't matter...
         last_image = curr_image;
         curr_image = image->image;
 
@@ -159,6 +174,9 @@ void ImageCallback(const sensor_msgs::CompressedImageConstPtr& msg) {
 
         if (last_image.empty()) {
             printf("last_image.empty()\n");
+            printf("first image!\n");
+            camera_angles.push_back(odomAngle);
+            camera_translations.push_back(Eigen::Vector3f{odomX, odomY, 1}); // TODO: Fix Z
             Mat img = curr_image; // readFromDataset(0);
             std::vector<KeyPoint> keypoints;
             detector->detect(img, keypoints, noArray());
@@ -171,6 +189,7 @@ void ImageCallback(const sensor_msgs::CompressedImageConstPtr& msg) {
                 first_image_mapping[key] = result_point_indices.size();
                 if(verbose) cout << "first_image_mapping[key]" << first_image_mapping[key] << endl;
                 result_point_indices.push_back(result_point_indices.size());
+                point_3d_locs.push_back(get3DPoint(kp.pt.x, kp.pt.y));
             }
             image_mappings.push_back(first_image_mapping);
         }
@@ -179,6 +198,11 @@ void ImageCallback(const sensor_msgs::CompressedImageConstPtr& msg) {
             // read images
             Mat img1 = last_image; // readFromDataset(prevIndex);
             Mat img2 = curr_image; // readFromDataset(currIndex);
+            
+            int prevIndex = image_mappings.size() - 1;
+
+            camera_angles.push_back(odomAngle);
+            camera_translations.push_back(Eigen::Vector3f(odomX, odomY, 1)); // TODO: Fix Z
 
             if ( img1.empty() || img2.empty() )
             {
@@ -203,11 +227,64 @@ void ImageCallback(const sensor_msgs::CompressedImageConstPtr& msg) {
                 cout << "Number of Keypoints img2: " << keypoints2.size() << endl;
                 // x is col y is row
             }
+
+            cout << "good_matches.size() " << good_matches.size() << endl;
+
+            unordered_map<int, int> image_mapping;
+            // matched points
+            for(size_t i = 0; i < good_matches.size(); i++) {
+                KeyPoint prev_keypoint = keypoints1[good_matches[i].queryIdx];
+                KeyPoint curr_keypoint = keypoints2[good_matches[i].trainIdx];
+
+                if( sqrt((prev_keypoint.pt.x - curr_keypoint.pt.x) * (prev_keypoint.pt.x - curr_keypoint.pt.x)
+                        + (prev_keypoint.pt.y - curr_keypoint.pt.y) * (prev_keypoint.pt.y - curr_keypoint.pt.y)) > 50) {
+                            // printf("skipping match\n");
+                            continue;
+                        }
+
+                int prevKey = computeKey((int) prev_keypoint.pt.x, (int) prev_keypoint.pt.y);
+                int currKey = computeKey((int) curr_keypoint.pt.x, (int) curr_keypoint.pt.y);
+
+                if(verbose) cout << (int) prev_keypoint.pt.y << " " << (int) prev_keypoint.pt.x << endl;
+
+                int prevPointIndex = image_mappings[prevIndex][prevKey];
+                if(verbose) cout << "prevKey " << prevKey << endl;
+                if(verbose) cout << "image_mappings[prevIndex][prevKey] " << image_mappings[prevIndex][prevKey] << endl;
+                if(verbose) cout << (image_mappings[prevIndex].find(prevKey) == image_mappings[prevIndex].end()) << endl;
+                if(verbose) cout << "prevPointIndex " << prevPointIndex << endl;
+
+                image_mapping[currKey] = prevPointIndex;
+            }
+
+            // return 0;
+
+
+            // unmatched points
+            for(size_t i = 0; i < keypoints2.size(); i++) {
+                KeyPoint curr_keypoint = keypoints2[i];
+                int currKey = computeKey(curr_keypoint.pt.x, curr_keypoint.pt.y);
+                
+                if(image_mapping.find(currKey) == image_mapping.end()) {
+                    image_mapping[currKey] = result_point_indices.size();
+                    result_point_indices.push_back(result_point_indices.size());
+                    point_3d_locs.push_back(get3DPoint(curr_keypoint.pt.x, curr_keypoint.pt.y));
+                    if(verbose) cout << "writing new index to " << currKey << endl;
+                }
+            }
+
+            // return 0;
+
+            image_mappings.push_back(image_mapping);
             
 
             // draw some lines
             // int lineCount = 0;
             for (size_t i = 0; i < good_matches.size(); i++) {
+                KeyPoint prev_keypoint = keypoints1[good_matches[i].queryIdx];
+                KeyPoint curr_keypoint = keypoints2[good_matches[i].trainIdx];
+                if( sqrt((prev_keypoint.pt.x - curr_keypoint.pt.x) * (prev_keypoint.pt.x - curr_keypoint.pt.x)
+                        + (prev_keypoint.pt.y - curr_keypoint.pt.y) * (prev_keypoint.pt.y - curr_keypoint.pt.y)) > 50)
+                        continue;
                 line(img2, keypoints1[good_matches[i].queryIdx].pt, keypoints2[good_matches[i].trainIdx].pt, Scalar(0, 255, 0), 1);
                 if (verbose) {
                     // cout << keypoints1[good_matches[i].queryIdx].pt << " " << keypoints2[good_matches[i].trainIdx].pt << endl;
@@ -224,15 +301,13 @@ void ImageCallback(const sensor_msgs::CompressedImageConstPtr& msg) {
     }
 }
 
-float odomX, odomY, odomTheta;
 void odomCallback(const nav_msgs::Odometry& msg)
 {
     odomX = msg.pose.pose.position.x;
     odomY = msg.pose.pose.position.y;
-    odomTheta = 2.0 * atan2(msg.pose.pose.orientation.z, msg.pose.pose.orientation.w);
+    odomAngle = 2.0 * atan2(msg.pose.pose.orientation.z, msg.pose.pose.orientation.w);
 }
 
-bool savedDepth = false;
 cv::Mat depth(720, 1280, CV_16UC1);
 void depthCallback(const sensor_msgs::ImageConstPtr& msg)
 {
@@ -251,16 +326,28 @@ void depthCallback(const sensor_msgs::ImageConstPtr& msg)
     // cv::Mat mono8_img = cv::Mat(cv_ptr->image.size(), CV_8UC1);
     // cv::convertScaleAbs(cv_ptr->image, mono8_img, 100, 0.0);
     
-    // cout << "Got a depth image!" << endl;
 }
 
-void get3DPoint(int rgbX, int rgbY){
-    uint16_t pixelDepthMM = depth.at<uint16_t>(rgbX, rgbY);
-    uint32_t depthMeters = pixelDepthMM / 1000;
+Eigen::Vector3f rotateVector(Eigen::Vector3f v, Eigen::Vector3f rotAxis, float theta){
+    return (v * cos(odomAngle)) + (rotAxis.cross(v) * sin(theta)) + (rotAxis * (rotAxis.dot(v) * 1 - cos(theta)));
+}
+
+Eigen::Vector3f get3DPoint(int rgbX, int rgbY){
+    uint16_t pixelDepthMM = depth.at<uint16_t>(rgbY, rgbX);
+    float depthMeters = (float) pixelDepthMM / 1000;
     float normalizedX = ((float) rgbX / 1280) * 2 - 1;
     float normalizedY = ((float) rgbY / 720) * 2 - 1;
-    cv::Vec3f dir{.2528, normalizedX, normalizedY};
-    // dir /= dir.norm();
+    Eigen::Vector3f v{.2528, normalizedX, normalizedY};
+    // v /=;
+    v.normalize();
+    v *= depthMeters;
+
+    v += Eigen::Vector3f{(float) odomX, (float) odomY, 1.0};
+    
+    Eigen::Vector3f rotAxis{0.0, 0.0, 1.0};
+    // Rodrigues Rotation Formula: 
+    return rotateVector(v, rotAxis, odomAngle);
+    return v;
 }
 
 int main(int argc, char **argv)
@@ -286,185 +373,43 @@ int main(int argc, char **argv)
     printf("spinning\n");
     ros::spin();
 
-    return 0;
+    printf("\n");
+    printf("writing BAL file...\n");
+    ofstream bal("bal.bal");
 
+    size_t numImages = image_mappings.size();
+    size_t numPoints = result_point_indices.size();
+    size_t numObservations = 0;
+    for(size_t imageIndex = 0; imageIndex < numImages; imageIndex++) {
+        numObservations += image_mappings[imageIndex].size();
+    }
+    assert(numImages == camera_angles.size());
+    assert(numImages == camera_translations.size());
+    assert(numPoints == point_3d_locs.size());
+    bal << numImages << " " << numPoints << " " << numObservations << endl;
 
-    unordered_map<int, unordered_set<int>> correspondent_indices {};
-
-    for(int image_index = 1; image_index < NUM_IMAGES; image_index++) {
-        int prevIndex = image_index - 1;
-        int currIndex = image_index;
-
-        // read images
-        Mat img1 = last_image; // readFromDataset(prevIndex);
-        Mat img2 = curr_image; // readFromDataset(currIndex);
-
-        if ( img1.empty() || img2.empty() )
-        {
-            cout << "Could not open or find the image!\n" << endl;
-            return -1;
+    for(size_t imageIndex = 0; imageIndex < numImages; imageIndex++) {
+        for(auto const& observation : image_mappings[imageIndex]) {
+            int observationKey = observation.first;
+            int observationPointIndex = observation.second;
+            Point2f observationLocation = extractKey(observationKey);
+            bal << imageIndex << " " << observationPointIndex << " " << observationLocation.x - (IMG_WIDTH / 2) << " " << observationLocation.y - (IMG_HEIGHT / 2) << endl;
         }
+    }
 
-        // get feature points and compute descriptors
-        std::vector<KeyPoint> keypoints1, keypoints2;
-        Mat descriptors1, descriptors2;
-        twoFrameDetectAndCompute(img1, img2, detector, keypoints1, keypoints2, descriptors1, descriptors2);
-
-        // match
-        std::vector<DMatch> good_matches = match(matcher, descriptors1, descriptors2);
-
-        if(verbose) {
-            cout << "Number of Good Matches: " << good_matches.size() << endl;
-            cout << "Number of Keypoints img1: " << keypoints1.size() << endl;
-            cout << "Number of Keypoints img2: " << keypoints2.size() << endl;
-        }
-
-
-        for(auto const& e : image_mappings[prevIndex]) {
-            auto prevKey = e.first;
-            auto prevPointIndex = e.second;
-
-            if(verbose) cout << prevKey << " : " << prevPointIndex << endl;
-        }
+    for(size_t imageIndex = 0; imageIndex < numImages; imageIndex++){
+        Eigen::Vector3f rotation = rotateVector(Eigen::Vector3f{1.0, 0.0, 0.0}, Eigen::Vector3f{0.0, 0.0, 1.0}, camera_angles[imageIndex]);
+        bal << rotation[0] << " " << rotation[1] << " " << rotation[2] << " " << endl;
+        bal << camera_translations[imageIndex][0] << " " << camera_translations[imageIndex][1] << " " << camera_translations[imageIndex][2] << endl;
+        bal << 225 << " " << .411396 << " " <<  -2.710792 << endl;
         
-
-        unordered_map<int, int> image_mapping;
-        // matched points
-        for(size_t i = 0; i < good_matches.size(); i++) {
-            KeyPoint prev_keypoint = keypoints1[good_matches[i].queryIdx];
-            KeyPoint curr_keypoint = keypoints2[good_matches[i].trainIdx];
-
-            int prevKey = computeKey((int) prev_keypoint.pt.x, (int) prev_keypoint.pt.y);
-            int currKey = computeKey((int) curr_keypoint.pt.x, (int) curr_keypoint.pt.y);
-
-            if(verbose) cout << (int) prev_keypoint.pt.y << " " << (int) prev_keypoint.pt.x << endl;
-
-
-            int prevPointIndex = image_mappings[prevIndex][prevKey];
-            if(verbose) cout << "prevKey " << prevKey << endl;
-            if(verbose) cout << "image_mappings[prevIndex][prevKey] " << image_mappings[prevIndex][prevKey] << endl;
-            if(verbose) cout << (image_mappings[prevIndex].find(prevKey) == image_mappings[prevIndex].end()) << endl;
-            if(verbose) cout << "prevPointIndex " << prevPointIndex << endl;
-
-            image_mapping[currKey] = prevPointIndex;
-        }
-
-        // return 0;
-
-
-        // unmatched points
-        for(size_t i = 0; i < keypoints2.size(); i++) {
-            KeyPoint curr_keypoint = keypoints2[i];
-            int currKey = computeKey(curr_keypoint.pt.x, curr_keypoint.pt.y);
-            
-            if(image_mapping.find(currKey) == image_mapping.end()) {
-                image_mapping[currKey] = result_point_indices.size();
-                result_point_indices.push_back(result_point_indices.size());
-                cout << "writing new index to " << currKey << endl;
-            }
-        }
-
-        // return 0;
-
-        image_mappings.push_back(image_mapping);
-
-
-        // draw some lines
-        int lineCount = 0;
-        for (size_t i = 0; i < good_matches.size(); i++) {
-            if (verbose) {
-                // cout << keypoints1[good_matches[i].queryIdx].pt << " " << keypoints2[good_matches[i].trainIdx].pt << endl;
-            }
-            auto prevKey = computeKey((int) keypoints1[good_matches[i].queryIdx].pt.x, (int) keypoints1[good_matches[i].queryIdx].pt.y);
-            auto currKey = computeKey((int) keypoints2[good_matches[i].trainIdx].pt.x, (int) keypoints2[good_matches[i].trainIdx].pt.y);
-            
-            if(image_mappings[prevIndex].find(prevKey) != image_mappings[prevIndex].end() && image_mapping.find(currKey) != image_mapping.end()) {
-                correspondent_indices[prevIndex].insert(prevKey);
-                correspondent_indices[currIndex].insert(currKey);
-                line(img2, extractKey(prevKey), extractKey(currKey), Scalar(0, 255, 0),
-                    2, LINE_AA);
-                lineCount++;
-            }
-        //     // circle()
-        }
-        cout << "lineCount " << lineCount << endl; 
-        imshow("lines", img2);
-        waitKey();
-
-        // for(int i = 0; i < )
-
-        // circle()
-        // imshow("Lines", img2);
-        // waitKey();
-        // imwrite("result.png", img2);
-
     }
-
-    vector<Scalar> colors {};
-    while(colors.size() < result_point_indices.size()) {
-        colors.push_back(Scalar(rand() % 256, rand() % 256, rand() % 256));
+    
+    for(size_t pointIndex = 0; pointIndex < point_3d_locs.size(); pointIndex++) {
+        bal << point_3d_locs[pointIndex][0] << " " << point_3d_locs[pointIndex][1] << " " << point_3d_locs[pointIndex][2] << " " << endl;
     }
-
-    for(int image_index = 1; image_index < NUM_IMAGES; image_index++) {
-        int prevIndex = image_index - 1;
-        int currIndex = image_index;
-
-        // read images
-        Mat img1 = readFromDataset(prevIndex);
-        Mat img2 = readFromDataset(currIndex);
-
-        for(auto const& e : image_mappings[prevIndex]) {
-            auto prevKey = e.first;
-            auto prevPointIndex = e.second;
-
-            Point2f prevPos = extractKey(prevKey);
-            // if(prevPointIndex == 0)
-            if(correspondent_indices[prevIndex].find(prevKey) != correspondent_indices[prevIndex].end()) {
-                circle(img1, prevPos, 3, colors[prevPointIndex], 3);
-                putText(img1, 
-                        to_string(prevPointIndex), 
-                        Point2f(std::min(IMG_WIDTH, (int) prevPos.x + 3), std::max(0, (int) prevPos.y - 3)),
-                        FONT_HERSHEY_SIMPLEX,
-                        0.3,
-                        colors[prevPointIndex],
-                        2);
-            }
-            
-            if(verbose) cout << "e.second " << prevPointIndex << endl;
-            // if(verbose) cout << "prevPointIndex " << prevPointIndex << endl;
-        }
-
-        for(auto const& e : image_mappings[currIndex]) {
-            auto currKey = e.first;
-            auto currPointIndex = e.second;
-
-            Point2f currPos = extractKey(currKey);
-            // if(currPointIndex == 0)
-
-                
-            if(correspondent_indices[currIndex].find(currKey) != correspondent_indices[currIndex].end()) {
-                circle(img2, currPos, 3, colors[currPointIndex], 3);
-            
-                putText(img2, 
-                        to_string(currPointIndex), 
-                        Point2f(std::min(IMG_WIDTH, (int) currPos.x + 3), std::max(0, (int) currPos.y - 3)),
-                        FONT_HERSHEY_SIMPLEX,
-                        0.3,
-                        colors[currPointIndex],
-                        2);
-            }
-            // if(verbose) {
-            //     cout << "currKey " << currKey << endl;
-            //     cout << "currPointIndex " << currPointIndex << endl;
-            // }
-        }
-
-        Mat res;
-        vconcat(img1, img2, res);
-        imshow("res", res);
-        imwrite("tracking_" + to_string(image_index) + ".png", res);
-        waitKey();
-    }
+    
+    printf("done writing bal file.\n");
 
     return 0;
 }

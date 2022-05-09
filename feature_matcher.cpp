@@ -265,7 +265,7 @@ int main( int argc, char* argv[] )
             // if(currPointIndex == 0)
 
                 
-            if(correspondent_indices[currIndex].find(currKey) != correspondent_indices[currIndex].end()) {
+            if(currPointIndex < 400) {
                 circle(img2, currPos, 3, colors[currPointIndex], 3);
             
                 putText(img2, 
