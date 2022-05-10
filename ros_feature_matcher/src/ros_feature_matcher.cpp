@@ -420,14 +420,13 @@ int main(int argc, char **argv)
 
     for(size_t imageIndex = 0; imageIndex < numImages; imageIndex++){
         Eigen::Vector3f rotation = rotateVector(Eigen::Vector3f{1.0, 0.0, 0.0}, Eigen::Vector3f{0.0, 0.0, 1.0}, camera_angles[imageIndex]);
-        bal << rotation[0] << " " << rotation[1] << " " << rotation[2] << " " << endl;
-        bal << camera_translations[imageIndex][0] << " " << camera_translations[imageIndex][1] << " " << camera_translations[imageIndex][2] << endl;
-        bal << 225 << " " << .411396 << " " <<  -2.710792 << endl;
-        
+        bal << rotation[0] << endl << rotation[1] << endl << rotation[2] << endl;
+        bal << camera_translations[imageIndex][0] << endl << camera_translations[imageIndex][1] << endl << camera_translations[imageIndex][2] << endl;
+        bal << 225 << endl << .411396 << endl <<  -2.710792 << endl; // camera params
     }
     
     for(size_t pointIndex = 0; pointIndex < point_3d_locs.size(); pointIndex++) {
-        bal << point_3d_locs[pointIndex][0] << " " << point_3d_locs[pointIndex][1] << " " << point_3d_locs[pointIndex][2] << " " << endl;
+        bal << point_3d_locs[pointIndex][0] << endl << point_3d_locs[pointIndex][1] << endl << point_3d_locs[pointIndex][2] << endl;
     }
     
     printf("done writing bal file.\n");
