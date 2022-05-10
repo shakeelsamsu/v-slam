@@ -2,6 +2,9 @@
 #include "std_msgs/String.h"
 #include "nav_msgs/Odometry.h"
 #include "sensor_msgs/CompressedImage.h"
+#include "sensor_msgs/PointCloud.h"
+#include "geometry_msgs/Point32.h"
+
 #include <iostream>
 #include <math.h>
 #include "opencv2/core.hpp"
@@ -228,7 +231,7 @@ void ImageCallback(const sensor_msgs::CompressedImageConstPtr& msg) {
                 // x is col y is row
             }
 
-            cout << "good_matches.size() " << good_matches.size() << endl;
+            // cout << "good_matches.size() " << good_matches.size() << endl;
 
             unordered_map<int, int> image_mapping;
             // matched points
@@ -309,11 +312,28 @@ void odomCallback(const nav_msgs::Odometry& msg)
 }
 
 cv::Mat depth(720, 1280, CV_16UC1);
+ros::Publisher cloudPub;
+sensor_msgs::PointCloud p;
+uint32_t seq = 0;
 void depthCallback(const sensor_msgs::ImageConstPtr& msg)
 {
     try
     {
+        p.points.clear();
+        p.header.seq = seq++;
+        p.header.frame_id = "base_link";
         memcpy(depth.data, msg->data.data(), msg->data.size());
+        for(int i = 0; i < depth.rows; i++){
+            for(int j = 0; j < depth.cols; j++){
+                Eigen::Vector3f point3d = get3DPoint(j, i);
+                geometry_msgs::Point32 point;
+                point.x = point3d[0];
+                point.y = point3d[1];
+                point.z = point3d[2];
+                p.points.push_back(point);
+            }
+        }
+        cloudPub.publish(p);
         cv::imshow("depth.jpg", depth);
         cv::waitKey(10);
     }
@@ -333,20 +353,20 @@ Eigen::Vector3f rotateVector(Eigen::Vector3f v, Eigen::Vector3f rotAxis, float t
 }
 
 Eigen::Vector3f get3DPoint(int rgbX, int rgbY){
+    assert(rgbX >= 0 && rgbX < IMG_WIDTH);
+    assert(rgbY >= 0 && rgbY <= IMG_HEIGHT);
     uint16_t pixelDepthMM = depth.at<uint16_t>(rgbY, rgbX);
     float depthMeters = (float) pixelDepthMM / 1000;
     float normalizedX = ((float) rgbX / 1280) * 2 - 1;
-    float normalizedY = ((float) rgbY / 720) * 2 - 1;
-    Eigen::Vector3f v{.2528, normalizedX, normalizedY};
-    // v /=;
-    v.normalize();
-    v *= depthMeters;
+    float normalizedY = ((float) rgbY / 1280) * 2 - (720/1280);
+    Eigen::Vector3f v{1, -normalizedX, -normalizedY};
+    v *= (depthMeters/v[0]);
 
-    v += Eigen::Vector3f{(float) odomX, (float) odomY, 1.0};
+    // v += Eigen::Vector3f{(float) odomX, (float) odomY, 0.5};
     
-    Eigen::Vector3f rotAxis{0.0, 0.0, 1.0};
-    // Rodrigues Rotation Formula: 
-    return rotateVector(v, rotAxis, odomAngle);
+    // Eigen::Vector3f rotAxis{0.0, 0.0, 1.0};
+    // // // Rodrigues Rotation Formula: 
+    // return rotateVector(v, rotAxis, odomAngle);
     return v;
 }
 
@@ -355,6 +375,7 @@ int main(int argc, char **argv)
     ros::init(argc, argv, "ros_feature_matcher");
     ros::NodeHandle n;
     ros::Subscriber odomSub = n.subscribe("odom", 1000, odomCallback);
+    cloudPub = n.advertise<sensor_msgs::PointCloud>("chatter", 1000);
     image_transport::ImageTransport it(n);
     image_transport::Subscriber depthSub = it.subscribe("camera/depth/image_raw", 1000, depthCallback);
 
