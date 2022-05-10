@@ -362,11 +362,11 @@ Eigen::Vector3f get3DPoint(int rgbX, int rgbY){
     Eigen::Vector3f v{1, -normalizedX, -normalizedY};
     v *= (depthMeters/v[0]);
 
-    // v += Eigen::Vector3f{(float) odomX, (float) odomY, 0.5};
-    
-    // Eigen::Vector3f rotAxis{0.0, 0.0, 1.0};
-    // // // Rodrigues Rotation Formula: 
-    // return rotateVector(v, rotAxis, odomAngle);
+    v += Eigen::Vector3f{(float) odomX, (float) odomY, 0};
+
+    Eigen::Vector3f rotAxis{0.0, 0.0, 1.0};
+    // // Rodrigues Rotation Formula: 
+    return rotateVector(v, rotAxis, odomAngle);
     return v;
 }
 
