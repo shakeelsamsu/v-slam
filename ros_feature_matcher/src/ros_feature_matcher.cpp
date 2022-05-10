@@ -196,12 +196,19 @@ void ImageCallback(const sensor_msgs::CompressedImageConstPtr& msg) {
                 if(first_image_mapping.find(key) != first_image_mapping.end()) 
                     continue;
                 if(verbose) cout << "corresponding key: " << key << endl;
+                Eigen::Vector3f point3d = get3DPoint((int)kp.pt.x, (int)kp.pt.y);
+                
+                if (point3d.norm() == 0) continue;
+
+
                 first_image_mapping[key] = result_point_indices.size();
                 if(verbose) cout << "first_image_mapping[key]" << first_image_mapping[key] << endl;
+
+
+
                 result_point_indices.push_back(result_point_indices.size());
                 point_3d_locs.push_back(get3DPoint(kp.pt.x, kp.pt.y));
 
-                Eigen::Vector3f point3d = get3DPoint((int)kp.pt.x, (int)kp.pt.y);
                 geometry_msgs::Point32 point;
                 point.x = point3d[0];
                 point.y = point3d[1];
@@ -282,11 +289,14 @@ void ImageCallback(const sensor_msgs::CompressedImageConstPtr& msg) {
                 int currKey = computeKey(curr_keypoint.pt.x, curr_keypoint.pt.y);
                 
                 if(image_mapping.find(currKey) == image_mapping.end()) {
+                    
+                    Eigen::Vector3f point3d = get3DPoint((int)curr_keypoint.pt.x, (int)curr_keypoint.pt.y);
+                    if (point3d.norm() == 0) continue;
+                    
                     image_mapping[currKey] = result_point_indices.size();
                     result_point_indices.push_back(result_point_indices.size());
                     point_3d_locs.push_back(get3DPoint(curr_keypoint.pt.x, curr_keypoint.pt.y));
                     if(verbose) cout << "writing new index to " << currKey << endl;
-                    Eigen::Vector3f point3d = get3DPoint((int)curr_keypoint.pt.x, (int)curr_keypoint.pt.y);
                     geometry_msgs::Point32 point;
                     point.x = point3d[0];
                     point.y = point3d[1];
@@ -316,7 +326,7 @@ void ImageCallback(const sensor_msgs::CompressedImageConstPtr& msg) {
                 // auto currKey = computeKey((int) keypoints2[good_matches[i].trainIdx].pt.x, (int) keypoints2[good_matches[i].trainIdx].pt.y);
             }
             imshow("lines", img2);
-            waitKey(10);
+            waitKey(1);
         }
         featurePub.publish(p2);
     } catch(cv_bridge::Exception& e) {
@@ -356,7 +366,7 @@ void depthCallback(const sensor_msgs::ImageConstPtr& msg)
         }
         cloudPub.publish(p);
         cv::imshow("depth.jpg", depth);
-        cv::waitKey(10);
+        cv::waitKey(1);
     }
     catch (cv_bridge::Exception& e)
     {
@@ -377,6 +387,7 @@ Eigen::Vector3f get3DPoint(int rgbX, int rgbY){
     assert(rgbX >= 0 && rgbX < IMG_WIDTH);
     assert(rgbY >= 0 && rgbY <= IMG_HEIGHT);
     uint16_t pixelDepthMM = depth.at<uint16_t>(rgbY, rgbX);
+    if(pixelDepthMM == 0) return Eigen::Vector3f{0, 0, 0};
     float depthMeters = (float) pixelDepthMM / 1000;
     float normalizedX = ((float) rgbX / 1280) * 2 - 1;
     float normalizedY = ((float) rgbY / 1280) * 2 - (720.0/1280.0);
