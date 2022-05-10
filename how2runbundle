@@ -1,0 +1,10 @@
+go in the ceres-solver/examples folder
+change line 213 of bal_problem.cc to have "255 0 0"
+go to ceres-bin and run make again (should just make the stuff that changed, not all of ceres)
+
+then run like this:
+./bin/bundle_adjuster --input <path_to_bal_file> --initial_ply <initial_cloud_out> --final_ply <final_play_out> --num_iterations 250 --num_threads 8
+
+visualize point clouds with vis.py
+you need to install the open3d pip module, make sure you get version 15. if u dont, uninstall it and upgrade pip then reinstall it
+python vis.py <ply_file_path>
