@@ -159,13 +159,14 @@ float odomX, odomY, odomAngle;
 Eigen::Vector3f rotateVector(Eigen::Vector3f v, Eigen::Vector3f rotAxis, float theta);
 
 Eigen::Vector3f get3DPoint(int rgbX, int rgbY);
-
+ros::Publisher featurePub;
+sensor_msgs::PointCloud p2;
+uint32_t seq2 = 0;
 void ImageCallback(const sensor_msgs::CompressedImageConstPtr& msg) {
     try {
         cv_bridge::CvImagePtr image = cv_bridge::toCvCopy(msg, sensor_msgs::image_encodings::BGR8);
         // imshow("ros image", image->image);
         // waitKey();
-
         if(image->image.empty()) return;
 
         // TODO: What if there are no features? probably doesn't matter...
@@ -174,7 +175,11 @@ void ImageCallback(const sensor_msgs::CompressedImageConstPtr& msg) {
 
         Ptr<ORB> detector = ORB::create(1200);
         Ptr<DescriptorMatcher> matcher = DescriptorMatcher::create("BruteForce-Hamming");
-
+        
+        p2.points.clear();
+        p2.header.seq = seq2++;
+        p2.header.frame_id = "base_link";
+                
         if (last_image.empty()) {
             printf("last_image.empty()\n");
             printf("first image!\n");
@@ -188,11 +193,20 @@ void ImageCallback(const sensor_msgs::CompressedImageConstPtr& msg) {
             for(KeyPoint kp : keypoints) {
                 if(verbose) cout << (int) kp.pt.y << " " << (int) kp.pt.x << endl;
                 int key = computeKey((int) kp.pt.x, (int) kp.pt.y);
-                if(verbose)  cout << "corresponding key: " << key << endl;
+                if(first_image_mapping.find(key) != first_image_mapping.end()) 
+                    continue;
+                if(verbose) cout << "corresponding key: " << key << endl;
                 first_image_mapping[key] = result_point_indices.size();
                 if(verbose) cout << "first_image_mapping[key]" << first_image_mapping[key] << endl;
                 result_point_indices.push_back(result_point_indices.size());
                 point_3d_locs.push_back(get3DPoint(kp.pt.x, kp.pt.y));
+
+                Eigen::Vector3f point3d = get3DPoint((int)kp.pt.x, (int)kp.pt.y);
+                geometry_msgs::Point32 point;
+                point.x = point3d[0];
+                point.y = point3d[1];
+                point.z = point3d[2];
+                p2.points.push_back(point);
             }
             image_mappings.push_back(first_image_mapping);
         }
@@ -272,6 +286,12 @@ void ImageCallback(const sensor_msgs::CompressedImageConstPtr& msg) {
                     result_point_indices.push_back(result_point_indices.size());
                     point_3d_locs.push_back(get3DPoint(curr_keypoint.pt.x, curr_keypoint.pt.y));
                     if(verbose) cout << "writing new index to " << currKey << endl;
+                    Eigen::Vector3f point3d = get3DPoint((int)curr_keypoint.pt.x, (int)curr_keypoint.pt.y);
+                    geometry_msgs::Point32 point;
+                    point.x = point3d[0];
+                    point.y = point3d[1];
+                    point.z = point3d[2];
+                    p2.points.push_back(point);
                 }
             }
 
@@ -298,6 +318,7 @@ void ImageCallback(const sensor_msgs::CompressedImageConstPtr& msg) {
             imshow("lines", img2);
             waitKey(10);
         }
+        featurePub.publish(p2);
     } catch(cv_bridge::Exception& e) {
         printf("err\n");
         return;
@@ -349,7 +370,7 @@ void depthCallback(const sensor_msgs::ImageConstPtr& msg)
 }
 
 Eigen::Vector3f rotateVector(Eigen::Vector3f v, Eigen::Vector3f rotAxis, float theta){
-    return (v * cos(odomAngle)) + (rotAxis.cross(v) * sin(theta)) + (rotAxis * (rotAxis.dot(v) * 1 - cos(theta)));
+    return (v * cos(odomAngle)) + (rotAxis.cross(v) * sin(theta)) + (rotAxis * (rotAxis.dot(v) * 1.0 - cos(theta)));
 }
 
 Eigen::Vector3f get3DPoint(int rgbX, int rgbY){
@@ -358,15 +379,19 @@ Eigen::Vector3f get3DPoint(int rgbX, int rgbY){
     uint16_t pixelDepthMM = depth.at<uint16_t>(rgbY, rgbX);
     float depthMeters = (float) pixelDepthMM / 1000;
     float normalizedX = ((float) rgbX / 1280) * 2 - 1;
-    float normalizedY = ((float) rgbY / 1280) * 2 - (720/1280);
-    Eigen::Vector3f v{1, -normalizedX, -normalizedY};
-    v *= (depthMeters/v[0]);
+    float normalizedY = ((float) rgbY / 1280) * 2 - (720.0/1280.0);
+    Eigen::Vector3f v{normalizedX, -normalizedY, -1};
+    v *= (-depthMeters/v[2]); // ensures depth is equal to depthMeters
 
-    v += Eigen::Vector3f{(float) odomX, (float) odomY, 0};
-
-    Eigen::Vector3f rotAxis{0.0, 0.0, 1.0};
+    // local camera frame to odom frame
+    // rotate
+    Eigen::Vector3f rotAxis{0.0, 1.0, 0.0};
     // // Rodrigues Rotation Formula: 
-    return rotateVector(v, rotAxis, odomAngle);
+    v = rotateVector(v, rotAxis, odomAngle);
+
+    // translate
+    v += Eigen::Vector3f{(float) odomY, 0, (float) -odomX};
+
     return v;
 }
 
@@ -376,6 +401,8 @@ int main(int argc, char **argv)
     ros::NodeHandle n;
     ros::Subscriber odomSub = n.subscribe("odom", 1000, odomCallback);
     cloudPub = n.advertise<sensor_msgs::PointCloud>("chatter", 1000);
+    featurePub = n.advertise<sensor_msgs::PointCloud>("feature_points_3d", 1000);
+
     image_transport::ImageTransport it(n);
     image_transport::Subscriber depthSub = it.subscribe("camera/depth/image_raw", 1000, depthCallback);
 
@@ -414,12 +441,13 @@ int main(int argc, char **argv)
             int observationKey = observation.first;
             int observationPointIndex = observation.second;
             Point2f observationLocation = extractKey(observationKey);
-            bal << imageIndex << " " << observationPointIndex << " " << observationLocation.x - (IMG_WIDTH / 2) << " " << observationLocation.y - (IMG_HEIGHT / 2) << endl;
+            bal << imageIndex << " " << observationPointIndex << " " << observationLocation.x - (IMG_WIDTH / 2) << " " << -(observationLocation.y - (IMG_HEIGHT / 2)) << endl;
         }
     }
 
     for(size_t imageIndex = 0; imageIndex < numImages; imageIndex++){
-        Eigen::Vector3f rotation = rotateVector(Eigen::Vector3f{1.0, 0.0, 0.0}, Eigen::Vector3f{0.0, 0.0, 1.0}, camera_angles[imageIndex]);
+        // Eigen::Vector3f rotation = rotateVector(Eigen::Vector3f{1.0, 0.0, 0.0}, Eigen::Vector3f{0.0, 0.0, 1.0}, camera_angles[imageIndex]);
+        Eigen::Vector3f rotation = Eigen::Vector3f{0.0, 0.0, camera_angles[imageIndex]};
         bal << rotation[0] << endl << rotation[1] << endl << rotation[2] << endl;
         bal << camera_translations[imageIndex][0] << endl << camera_translations[imageIndex][1] << endl << camera_translations[imageIndex][2] << endl;
         bal << 225 << endl << .411396 << endl <<  -2.710792 << endl; // camera params
