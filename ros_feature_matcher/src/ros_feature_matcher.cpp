@@ -204,8 +204,6 @@ void ImageCallback(const sensor_msgs::CompressedImageConstPtr& msg) {
                 first_image_mapping[key] = result_point_indices.size();
                 if(verbose) cout << "first_image_mapping[key]" << first_image_mapping[key] << endl;
 
-
-
                 result_point_indices.push_back(result_point_indices.size());
                 point_3d_locs.push_back(get3DPoint(kp.pt.x, kp.pt.y));
 
@@ -214,8 +212,15 @@ void ImageCallback(const sensor_msgs::CompressedImageConstPtr& msg) {
                 point.y = point3d[1];
                 point.z = point3d[2];
                 p2.points.push_back(point);
+
+                printf("%f %f\n", kp.pt.x, kp.pt.y);
+                printf("%f %f %f\n", point.x, point.y, point.z);
             }
             image_mappings.push_back(first_image_mapping);
+
+            cv::imwrite("../image_0.png", curr_image);
+
+            return;
         }
 
         else {
@@ -391,17 +396,17 @@ Eigen::Vector3f get3DPoint(int rgbX, int rgbY){
     float depthMeters = (float) pixelDepthMM / 1000;
     float normalizedX = ((float) rgbX / 1280) * 2 - 1;
     float normalizedY = ((float) rgbY / 1280) * 2 - (720.0/1280.0);
-    Eigen::Vector3f v{normalizedX, -normalizedY, -1};
+    Eigen::Vector3f v{-normalizedX, -normalizedY, -1};
     v *= (-depthMeters/v[2]); // ensures depth is equal to depthMeters
 
     // local camera frame to odom frame
     // rotate
-    Eigen::Vector3f rotAxis{0.0, 1.0, 0.0};
+    // Eigen::Vector3f rotAxis{0.0, 1.0, 0.0};
     // // Rodrigues Rotation Formula: 
-    v = rotateVector(v, rotAxis, odomAngle);
+    // v = rotateVector(v, rotAxis, odomAngle);
 
     // translate
-    v += Eigen::Vector3f{(float) odomY, 0, (float) -odomX};
+    // v += Eigen::Vector3f{(float) odomY, 0, (float) -odomX};
 
     return v;
 }
