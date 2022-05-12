@@ -4,6 +4,8 @@
 #include "sensor_msgs/CompressedImage.h"
 #include "sensor_msgs/PointCloud.h"
 #include "geometry_msgs/Point32.h"
+#include "geometry_msgs/Pose.h"
+#include "geometry_msgs/PoseStamped.h"
 
 #include <iostream>
 #include <math.h>
@@ -16,6 +18,7 @@
 #include "opencv2/features2d.hpp"
 #include "eigen3/Eigen/Dense"
 #include "eigen3/Eigen/Geometry"
+#include <opencv2/core/eigen.hpp>
 // #include "opencv2/xfeatures2d.hpp"
 
 /* Camera Calibration Stuff: 
@@ -100,7 +103,7 @@ bool verbose = false;
 vector<int> result_point_indices {};
 vector<unordered_map<int, int>> image_mappings;
 vector<Eigen::Vector3f> point_3d_locs;
-vector<float> camera_angles;
+vector<Eigen::Vector3f> camera_angles;
 vector<Eigen::Vector3f> camera_translations;
 
 Mat last_image;
@@ -154,9 +157,13 @@ Point2f extractKey(int key) {
     return Point2f(key % IMG_WIDTH, key / IMG_WIDTH);
 }
 
-float odomX, odomY, odomAngle;
+Eigen::Vector3f camera_pose = {1000, 1000, 1000};
+float camera_angle = 1000;
+Eigen::Vector3f camera_ref_pose = {0, 0, 0};
+float camera_ref_angle = 0;
+bool odomInit = false;
 
-Eigen::Vector3f rotateVector(Eigen::Vector3f v, Eigen::Vector3f rotAxis, float theta);
+// Eigen::Vector3f rotateVector(Eigen::Vector3f v, Eigen::Vector3f rotAxis, float theta);
 
 Eigen::Vector3f get3DPoint(int rgbX, int rgbY);
 ros::Publisher featurePub;
@@ -168,6 +175,7 @@ void ImageCallback(const sensor_msgs::CompressedImageConstPtr& msg) {
         // imshow("ros image", image->image);
         // waitKey();
         if(image->image.empty()) return;
+        if(!odomInit) return;
 
         // TODO: What if there are no features? probably doesn't matter...
         last_image = curr_image;
@@ -178,13 +186,16 @@ void ImageCallback(const sensor_msgs::CompressedImageConstPtr& msg) {
         
         p2.points.clear();
         p2.header.seq = seq2++;
-        p2.header.frame_id = "base_link";
+        p2.header.frame_id = "odom";
                 
         if (last_image.empty()) {
             printf("last_image.empty()\n");
             printf("first image!\n");
-            camera_angles.push_back(odomAngle);
-            camera_translations.push_back(Eigen::Vector3f{odomX, odomY, 1}); // TODO: Fix Z
+            
+            Eigen::AngleAxisf aa = Eigen::AngleAxisf(M_PI / 2 + camera_angle, Eigen::Vector3f{0.0, 1.0, 0.0}); // rotate odom around some axis
+            
+            camera_angles.push_back(aa.axis().normalized() * aa.angle());
+            camera_translations.push_back(camera_pose); // TODO: Fix Z
             Mat img = curr_image; // readFromDataset(0);
             std::vector<KeyPoint> keypoints;
             detector->detect(img, keypoints, noArray());
@@ -213,12 +224,10 @@ void ImageCallback(const sensor_msgs::CompressedImageConstPtr& msg) {
                 point.z = point3d[2];
                 p2.points.push_back(point);
 
-                printf("%f %f\n", kp.pt.x, kp.pt.y);
-                printf("%f %f %f\n", point.x, point.y, point.z);
+                // printf("%f %f\n", kp.pt.x, kp.pt.y);
+                // printf("%f %f %f\n", point.x, point.y, point.z);
             }
             image_mappings.push_back(first_image_mapping);
-
-            cv::imwrite("../image_0.png", curr_image);
 
             return;
         }
@@ -230,8 +239,21 @@ void ImageCallback(const sensor_msgs::CompressedImageConstPtr& msg) {
             
             int prevIndex = image_mappings.size() - 1;
 
-            camera_angles.push_back(odomAngle);
-            camera_translations.push_back(Eigen::Vector3f(odomX, odomY, 1)); // TODO: Fix Z
+            // Eigen::AngleAxisf aa = Eigen::AngleAxisf(-M_PI / 2, Eigen::Vector3f{1.0, 0.0, 0.0}); // rotate around x-axis from base_link
+            // aa = aa * Eigen::AngleAxisf(-M_PI / 2, Eigen::Vector3f{0.0, 1.0, 0.0}); // rotate around y-axis (new z-axis)
+            
+            // now we transform from base link to odom
+            Eigen::AngleAxisf aa = Eigen::AngleAxisf(M_PI / 2 + camera_angle, Eigen::Vector3f{0.0, 1.0, 0.0}); // rotate odom around some axis
+
+            // Mat inp = Mat::zeros(3, 3, CV_64F);
+            // cv::eigen2cv(aa.toRotationMatrix(), inp);
+            // Mat res = Mat::zeros(1, 3, CV_64F);
+            // cv::Rodrigues(inp, res);
+
+            // camera_angles.push_back(Eigen::Vector3f {res.at<float>(0, 0), res.at<float>(0, 1), res.at<float>(0, 2)});
+
+            camera_angles.push_back(aa.axis().normalized() * aa.angle());
+            camera_translations.push_back(camera_pose); // TODO: Fix Z
 
             if ( img1.empty() || img2.empty() )
             {
@@ -245,6 +267,18 @@ void ImageCallback(const sensor_msgs::CompressedImageConstPtr& msg) {
             if(descriptors1.empty()|| descriptors2.empty()) {
                 cout << "empty descriptor" << endl;
                 return;
+            }
+            
+            if(prevIndex == 1) {
+                cv::imwrite("../image_1.png", curr_image);
+                for(int i = 0; i < 3; i++) printf("%f\n", camera_angles.back()[i]);
+                for(int i = 0; i < 3; i++) printf("%f\n", camera_translations.back()[i]);
+                for(auto kp : keypoints2) {
+                    Eigen::Vector3f point = get3DPoint((int)kp.pt.x, (int)kp.pt.y);
+                    if(point.norm() == 0) continue;
+                    printf("%f %f\n", kp.pt.x, kp.pt.y);
+                    printf("%f %f %f\n", point[0], point[1], point[2]);
+                }
             }
             
             // match
@@ -296,7 +330,9 @@ void ImageCallback(const sensor_msgs::CompressedImageConstPtr& msg) {
                 if(image_mapping.find(currKey) == image_mapping.end()) {
                     
                     Eigen::Vector3f point3d = get3DPoint((int)curr_keypoint.pt.x, (int)curr_keypoint.pt.y);
-                    if (point3d.norm() == 0) continue;
+                    if (point3d.norm() == 0) {
+                        continue;
+                    }
                     
                     image_mapping[currKey] = result_point_indices.size();
                     result_point_indices.push_back(result_point_indices.size());
@@ -339,12 +375,35 @@ void ImageCallback(const sensor_msgs::CompressedImageConstPtr& msg) {
         return;
     }
 }
-
+ros::Publisher posePub;
+uint32_t poseSeq = 0;
 void odomCallback(const nav_msgs::Odometry& msg)
 {
-    odomX = msg.pose.pose.position.x;
-    odomY = msg.pose.pose.position.y;
-    odomAngle = 2.0 * atan2(msg.pose.pose.orientation.z, msg.pose.pose.orientation.w);
+    if (!odomInit) {
+        camera_pose = {0, 0, 0};
+        camera_angle = 0;
+
+        camera_ref_pose = {-(float)msg.pose.pose.position.y, 0, -(float)msg.pose.pose.position.x};
+        camera_ref_angle = 2.0 * atan2(msg.pose.pose.orientation.z, msg.pose.pose.orientation.w);
+        odomInit = true;
+    } else {
+        camera_pose = Eigen::Vector3f{-(float)msg.pose.pose.position.y, 0, -(float)msg.pose.pose.position.x} - camera_ref_pose;
+        camera_angle = 2.0 * atan2(msg.pose.pose.orientation.z, msg.pose.pose.orientation.w) - camera_ref_angle; 
+        auto p = geometry_msgs::PoseStamped();
+        p.pose.position.x = camera_pose[0];
+        p.pose.position.y = camera_pose[1];
+        p.pose.position.z = camera_pose[2];
+        Eigen::AngleAxisf r = Eigen::AngleAxisf((M_PI / 2 + camera_angle), Eigen::Vector3f{0.0, 1.0, 0.0});
+        Eigen::Quaternionf rQuat = Eigen::Quaternionf(r);
+        rQuat.normalize();
+        p.pose.orientation.x = rQuat.x();
+        p.pose.orientation.y = rQuat.y();
+        p.pose.orientation.z = rQuat.z();
+        p.pose.orientation.w = rQuat.w();
+        p.header.seq = poseSeq++;
+        p.header.frame_id = "odom";
+        posePub.publish(p);
+    }
 }
 
 cv::Mat depth(720, 1280, CV_16UC1);
@@ -357,7 +416,7 @@ void depthCallback(const sensor_msgs::ImageConstPtr& msg)
     {
         p.points.clear();
         p.header.seq = seq++;
-        p.header.frame_id = "base_link";
+        p.header.frame_id = "odom";
         memcpy(depth.data, msg->data.data(), msg->data.size());
         for(int i = 0; i < depth.rows; i++){
             for(int j = 0; j < depth.cols; j++){
@@ -384,10 +443,11 @@ void depthCallback(const sensor_msgs::ImageConstPtr& msg)
     
 }
 
-Eigen::Vector3f rotateVector(Eigen::Vector3f v, Eigen::Vector3f rotAxis, float theta){
-    return (v * cos(odomAngle)) + (rotAxis.cross(v) * sin(theta)) + (rotAxis * (rotAxis.dot(v) * 1.0 - cos(theta)));
-}
+// Eigen::Vector3f rotateVector(Eigen::Vector3f v, Eigen::Vector3f rotAxis, float theta){
+//     return (v * cos(odomAngle)) + (rotAxis.cross(v) * sin(theta)) + (rotAxis * (rotAxis.dot(v) * 1.0 - cos(theta)));
+// }
 
+// bonk
 Eigen::Vector3f get3DPoint(int rgbX, int rgbY){
     assert(rgbX >= 0 && rgbX < IMG_WIDTH);
     assert(rgbY >= 0 && rgbY <= IMG_HEIGHT);
@@ -398,6 +458,28 @@ Eigen::Vector3f get3DPoint(int rgbX, int rgbY){
     float normalizedY = ((float) rgbY / 1280) * 2 - (720.0/1280.0);
     Eigen::Vector3f v{-normalizedX, -normalizedY, -1};
     v *= (-depthMeters/v[2]); // ensures depth is equal to depthMeters
+
+    // right now v is in the camera frame
+    // printf("camera frame v: %f %f %f\n", v[0], v[1], v[2]);
+
+    // now we transform to base link
+    // Eigen::Quaternionf q = Eigen::Quaternionf::FromTwoVectors(Eigen::Vector3f {1.0, 2.0, -3.0}, Eigen::Vector3f {3.0, -1.0, 2.0});
+    
+    // Eigen::AngleAxisf aa = Eigen::AngleAxisf(-M_PI / 2, Eigen::Vector3f{1.0, 0.0, 0.0}); // rotate around x-axis from base_link
+    // aa = aa * Eigen::AngleAxisf(-M_PI / 2, Eigen::Vector3f{0.0, 1.0, 0.0}); // rotate around y-axis (new z-axis)
+    
+    // now we transform from base link to odom
+    // aa = aa * Eigen::AngleAxisf(odomAngle, Eigen::Vector3f{0.0, -1.0, 0.0}); // rotate odom around some axis
+    
+    Eigen::AngleAxisf r = Eigen::AngleAxisf(camera_angle, Eigen::Vector3f{0.0, 1.0, 0.0});
+    v = r.toRotationMatrix() * v;
+    v += camera_pose;
+
+    // printf("odomX, odomY, odomAngle: %f %f %f\n", odomX, odomY, odomAngle);
+    // printf("pointLoc: %f %f %f\n", v[0], v[1], v[2]);
+
+    // now we transform from base link to odom
+    
 
     // local camera frame to odom frame
     // rotate
@@ -418,6 +500,7 @@ int main(int argc, char **argv)
     ros::Subscriber odomSub = n.subscribe("odom", 1000, odomCallback);
     cloudPub = n.advertise<sensor_msgs::PointCloud>("chatter", 1000);
     featurePub = n.advertise<sensor_msgs::PointCloud>("feature_points_3d", 1000);
+    posePub = n.advertise<geometry_msgs::PoseStamped>("cam_pose", 10);
 
     image_transport::ImageTransport it(n);
     image_transport::Subscriber depthSub = it.subscribe("camera/depth/image_raw", 1000, depthCallback);
@@ -463,8 +546,8 @@ int main(int argc, char **argv)
 
     for(size_t imageIndex = 0; imageIndex < numImages; imageIndex++){
         // Eigen::Vector3f rotation = rotateVector(Eigen::Vector3f{1.0, 0.0, 0.0}, Eigen::Vector3f{0.0, 0.0, 1.0}, camera_angles[imageIndex]);
-        Eigen::Vector3f rotation = Eigen::Vector3f{0.0, 0.0, camera_angles[imageIndex]};
-        bal << rotation[0] << endl << rotation[1] << endl << rotation[2] << endl;
+        // Eigen::Vector3f rotation = Eigen::Vector3f{0.0, 0.0, camera_angles[imageIndex]};
+        bal << camera_angles[imageIndex][0] << endl << camera_angles[imageIndex][1] << endl << camera_angles[imageIndex][2] << endl;
         bal << camera_translations[imageIndex][0] << endl << camera_translations[imageIndex][1] << endl << camera_translations[imageIndex][2] << endl;
         bal << 225 << endl << .411396 << endl <<  -2.710792 << endl; // camera params
     }
