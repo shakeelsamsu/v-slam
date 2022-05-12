@@ -192,7 +192,7 @@ void ImageCallback(const sensor_msgs::CompressedImageConstPtr& msg) {
             printf("last_image.empty()\n");
             printf("first image!\n");
             
-            Eigen::AngleAxisf aa = Eigen::AngleAxisf(M_PI / 2 + camera_angle, Eigen::Vector3f{0.0, 1.0, 0.0}); // rotate odom around some axis
+            Eigen::AngleAxisf aa = Eigen::AngleAxisf(camera_angle, Eigen::Vector3f{0.0, 1.0, 0.0}); // rotate odom around some axis
             
             camera_angles.push_back(aa.axis().normalized() * aa.angle());
             camera_translations.push_back(camera_pose); // TODO: Fix Z
@@ -243,7 +243,7 @@ void ImageCallback(const sensor_msgs::CompressedImageConstPtr& msg) {
             // aa = aa * Eigen::AngleAxisf(-M_PI / 2, Eigen::Vector3f{0.0, 1.0, 0.0}); // rotate around y-axis (new z-axis)
             
             // now we transform from base link to odom
-            Eigen::AngleAxisf aa = Eigen::AngleAxisf(M_PI / 2 + camera_angle, Eigen::Vector3f{0.0, 1.0, 0.0}); // rotate odom around some axis
+            Eigen::AngleAxisf aa = Eigen::AngleAxisf(camera_angle, Eigen::Vector3f{0.0, 1.0, 0.0}); // rotate odom around some axis
 
             // Mat inp = Mat::zeros(3, 3, CV_64F);
             // cv::eigen2cv(aa.toRotationMatrix(), inp);
@@ -269,8 +269,8 @@ void ImageCallback(const sensor_msgs::CompressedImageConstPtr& msg) {
                 return;
             }
             
-            if(prevIndex == 1) {
-                cv::imwrite("../image_1.png", curr_image);
+            if(prevIndex == 75) {
+                cv::imwrite("../image_75.png", curr_image);
                 for(int i = 0; i < 3; i++) printf("%f\n", camera_angles.back()[i]);
                 for(int i = 0; i < 3; i++) printf("%f\n", camera_translations.back()[i]);
                 for(auto kp : keypoints2) {
@@ -555,7 +555,9 @@ int main(int argc, char **argv)
     for(size_t pointIndex = 0; pointIndex < point_3d_locs.size(); pointIndex++) {
         bal << point_3d_locs[pointIndex][0] << endl << point_3d_locs[pointIndex][1] << endl << point_3d_locs[pointIndex][2] << endl;
     }
-    
+
+    // cout << camera_translations.back()[0] << " " << camera_translations.back()[1] << " " << camera_translations.back()[2] << endl;
+
     printf("done writing bal file.\n");
 
     return 0;
