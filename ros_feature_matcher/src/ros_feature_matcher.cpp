@@ -174,14 +174,16 @@ void ImageCallback(const sensor_msgs::CompressedImageConstPtr& msg) {
         cv_bridge::CvImagePtr image = cv_bridge::toCvCopy(msg, sensor_msgs::image_encodings::BGR8);
         // imshow("ros image", image->image);
         // waitKey();
+
         if(image->image.empty()) return;
         if(!odomInit) return;
 
-        // TODO: What if there are no features? probably doesn't matter...
         last_image = curr_image;
         curr_image = image->image;
 
-        Ptr<ORB> detector = ORB::create(1200);
+        int minHessian = 8000;
+
+        Ptr<ORB> detector = ORB::create(minHessian);
         Ptr<DescriptorMatcher> matcher = DescriptorMatcher::create("BruteForce-Hamming");
         
         p2.points.clear();
@@ -192,10 +194,10 @@ void ImageCallback(const sensor_msgs::CompressedImageConstPtr& msg) {
             printf("last_image.empty()\n");
             printf("first image!\n");
             
-            Eigen::AngleAxisf aa = Eigen::AngleAxisf(camera_angle, Eigen::Vector3f{0.0, 1.0, 0.0}); // rotate odom around some axis
+            Eigen::AngleAxisf aa = Eigen::AngleAxisf(-camera_angle, Eigen::Vector3f{0.0, 1.0, 0.0}); // rotate odom around some axis
             
             camera_angles.push_back(aa.axis().normalized() * aa.angle());
-            camera_translations.push_back(camera_pose); // TODO: Fix Z
+            camera_translations.push_back(-camera_pose); // TODO: Fix Z
             Mat img = curr_image; // readFromDataset(0);
             std::vector<KeyPoint> keypoints;
             detector->detect(img, keypoints, noArray());
@@ -211,7 +213,7 @@ void ImageCallback(const sensor_msgs::CompressedImageConstPtr& msg) {
                 
                 if (point3d.norm() == 0) continue;
 
-
+                
                 first_image_mapping[key] = result_point_indices.size();
                 if(verbose) cout << "first_image_mapping[key]" << first_image_mapping[key] << endl;
 
@@ -228,7 +230,14 @@ void ImageCallback(const sensor_msgs::CompressedImageConstPtr& msg) {
                 // printf("%f %f %f\n", point.x, point.y, point.z);
             }
             image_mappings.push_back(first_image_mapping);
-
+            if(verbose) {
+                for(auto const& observation : image_mappings[0]) {
+                    int observationKey = observation.first;
+                    int observationPointIndex = observation.second;
+                    Point2f observationLocation = extractKey(observationKey);
+                    cout << 0 << " " << observationPointIndex << " " << observationLocation.x - (IMG_WIDTH / 2) << " " << -(observationLocation.y - (IMG_HEIGHT / 2)) << endl;
+                }
+            }
             return;
         }
 
@@ -243,7 +252,7 @@ void ImageCallback(const sensor_msgs::CompressedImageConstPtr& msg) {
             // aa = aa * Eigen::AngleAxisf(-M_PI / 2, Eigen::Vector3f{0.0, 1.0, 0.0}); // rotate around y-axis (new z-axis)
             
             // now we transform from base link to odom
-            Eigen::AngleAxisf aa = Eigen::AngleAxisf(camera_angle, Eigen::Vector3f{0.0, 1.0, 0.0}); // rotate odom around some axis
+            Eigen::AngleAxisf aa = Eigen::AngleAxisf(-camera_angle, Eigen::Vector3f{0.0, 1.0, 0.0}); // rotate odom around some axis
 
             // Mat inp = Mat::zeros(3, 3, CV_64F);
             // cv::eigen2cv(aa.toRotationMatrix(), inp);
@@ -253,7 +262,7 @@ void ImageCallback(const sensor_msgs::CompressedImageConstPtr& msg) {
             // camera_angles.push_back(Eigen::Vector3f {res.at<float>(0, 0), res.at<float>(0, 1), res.at<float>(0, 2)});
 
             camera_angles.push_back(aa.axis().normalized() * aa.angle());
-            camera_translations.push_back(camera_pose); // TODO: Fix Z
+            camera_translations.push_back(-camera_pose); // TODO: Fix Z
 
             if ( img1.empty() || img2.empty() )
             {
@@ -269,8 +278,8 @@ void ImageCallback(const sensor_msgs::CompressedImageConstPtr& msg) {
                 return;
             }
             
-            if(prevIndex == 75) {
-                cv::imwrite("../image_75.png", curr_image);
+            if(prevIndex == 50) {
+                cv::imwrite("../corner_img50.png", curr_image);
                 for(int i = 0; i < 3; i++) printf("%f\n", camera_angles.back()[i]);
                 for(int i = 0; i < 3; i++) printf("%f\n", camera_translations.back()[i]);
                 for(auto kp : keypoints2) {
@@ -300,7 +309,7 @@ void ImageCallback(const sensor_msgs::CompressedImageConstPtr& msg) {
                 KeyPoint curr_keypoint = keypoints2[good_matches[i].trainIdx];
 
                 if( sqrt((prev_keypoint.pt.x - curr_keypoint.pt.x) * (prev_keypoint.pt.x - curr_keypoint.pt.x)
-                        + (prev_keypoint.pt.y - curr_keypoint.pt.y) * (prev_keypoint.pt.y - curr_keypoint.pt.y)) > 50) {
+                        + (prev_keypoint.pt.y - curr_keypoint.pt.y) * (prev_keypoint.pt.y - curr_keypoint.pt.y)) > 15) {
                             // printf("skipping match\n");
                             continue;
                         }
@@ -310,6 +319,8 @@ void ImageCallback(const sensor_msgs::CompressedImageConstPtr& msg) {
 
                 if(verbose) cout << (int) prev_keypoint.pt.y << " " << (int) prev_keypoint.pt.x << endl;
 
+                if(image_mappings[prevIndex].find(prevKey) == image_mappings[prevIndex].end())
+                    continue;
                 int prevPointIndex = image_mappings[prevIndex][prevKey];
                 if(verbose) cout << "prevKey " << prevKey << endl;
                 if(verbose) cout << "image_mappings[prevIndex][prevKey] " << image_mappings[prevIndex][prevKey] << endl;
@@ -357,7 +368,7 @@ void ImageCallback(const sensor_msgs::CompressedImageConstPtr& msg) {
                 KeyPoint prev_keypoint = keypoints1[good_matches[i].queryIdx];
                 KeyPoint curr_keypoint = keypoints2[good_matches[i].trainIdx];
                 if( sqrt((prev_keypoint.pt.x - curr_keypoint.pt.x) * (prev_keypoint.pt.x - curr_keypoint.pt.x)
-                        + (prev_keypoint.pt.y - curr_keypoint.pt.y) * (prev_keypoint.pt.y - curr_keypoint.pt.y)) > 50)
+                        + (prev_keypoint.pt.y - curr_keypoint.pt.y) * (prev_keypoint.pt.y - curr_keypoint.pt.y)) > 15)
                         continue;
                 line(img2, keypoints1[good_matches[i].queryIdx].pt, keypoints2[good_matches[i].trainIdx].pt, Scalar(0, 255, 0), 1);
                 if (verbose) {
@@ -505,7 +516,7 @@ int main(int argc, char **argv)
     image_transport::ImageTransport it(n);
     image_transport::Subscriber depthSub = it.subscribe("camera/depth/image_raw", 1000, depthCallback);
 
-    int minHessian = 400;
+    int minHessian = 8000;
     
     Ptr<ORB> detector = ORB::create(minHessian);
     Ptr<DescriptorMatcher> matcher = DescriptorMatcher::create("BruteForce-Hamming");
